@@ -14,17 +14,24 @@ from __future__ import absolute_import, print_function
 import uuid
 
 import pytest
+from commonmeta import (
+    CrossrefError,
+    CrossrefGoneError,
+    CrossrefNoContentError,
+    CrossrefNotFoundError,
+)
 from datacite.errors import (
     DataCiteError,
     DataCiteGoneError,
     DataCiteNoContentError,
     DataCiteNotFoundError,
     HttpError,
-)
+)s
 from mock import MagicMock, patch
 
 from invenio_pidstore.models import PIDStatus
 from invenio_pidstore.providers.base import BaseProvider
+from invenio_pidstore.providers.crossref import CrossrefProvider
 from invenio_pidstore.providers.datacite import DataCiteProvider
 from invenio_pidstore.providers.recordid import RecordIdProvider
 from invenio_pidstore.providers.recordid_v2 import RecordIdProviderV2
@@ -136,6 +143,155 @@ def test_recordid_provider_v2(app, db):
         assert len(part1) == 1
         assert len(part2) == 1
         assert len(part3) == 1
+
+
+def test_crossref_create_get(app, db):
+    """Test crossref provider create/get."""
+    with app.app_context():
+        provider = CrossrefProvider.create("10.1234/a")
+        assert provider.pid.status == PIDStatus.NEW
+        assert provider.pid.pid_provider == "crossref"
+
+        # Create passing client kwarg to provider object creation
+        provider = CrossrefProvider.create("10.1234/b", client=MagicMock())
+        assert provider.pid.status == PIDStatus.NEW
+        assert provider.pid.pid_provider == "crossref"
+        assert isinstance(provider.api, MagicMock)
+
+        provider = CrossrefProvider.get("10.1234/a")
+        assert provider.pid.status == PIDStatus.NEW
+        assert provider.pid.pid_provider == "crossref"
+
+        provider = CrossrefProvider.get("10.1234/a", client=MagicMock())
+        assert isinstance(provider.api, MagicMock())
+
+
+def test_crossref_reserve_register_update_delete(app, db):
+    """Test crossref provider reserve."""
+    with app.app_context():
+        api = MagicMock()
+        provider = CrossrefProvider.create("10.1234/a", client=api)
+        assert provider.reserve("mydoc")
+        assert provider.pid.status == PIDStatus.RESERVED
+        api.metadata_post.assert_called_with("mydoc")
+
+        assert provider.register("myurl", "anotherdoc")
+        assert provider.pid.status == PIDStatus.REGISTERED
+        api.metadata_post.assert_called_with("anotherdoc")
+        api.doi_post.assert_called_with("10.1234/a", "myurl")
+
+        assert provider.update("anotherurl", "yetanother")
+        assert provider.pid.status == PIDStatus.REGISTERED
+        api.metadata_post.assert_called_with("yetanother")
+        api.doi_post.assert_called_with("10.1234/a", "anotherurl")
+
+        assert provider.delete()
+        assert provider.pid.status == PIDStatus.DELETED
+        api.metadata_delete.assert_called_with("10.1234/a")
+
+        assert provider.update("newurl", "newdoc")
+        assert provider.pid.status == PIDStatus.REGISTERED
+        api.metadata_post.assert_called_with("newdoc")
+        api.doi_post.assert_called_with("10.1234/a", "newurl")
+
+
+@patch("invenio_pidstore.providers.crossref.logger")
+def test_crossref_error_reserve(logger, app, db):
+    """Test reserve errors."""
+    with app.app_context():
+        api = MagicMock()
+        provider = CrossrefProvider.create("10.1234/a", client=api)
+
+        api.metadata_post.side_effect = CrossrefError
+        pytest.raises(CrossrefError, provider.reserve, "testdoc")
+        assert logger.exception.call_args[0][0] == "Failed to reserve in Crossref"
+
+
+@patch("invenio_pidstore.providers.crossref.logger")
+def test_crossref_error_register_update(logger, app, db):
+    """Test register errors."""
+    with app.app_context():
+        api = MagicMock()
+        provider = CrossrefProvider.create("10.1234/a", client=api)
+
+        api.doi_post.side_effect = CrossrefError
+        pytest.raises(CrossrefError, provider.register, "testurl", "testdoc")
+        assert logger.exception.call_args[0][0] == "Failed to register in Crossref"
+
+        pytest.raises(CrossrefError, provider.update, "testurl", "testdoc")
+        assert logger.exception.call_args[0][0] == "Failed to update in Crossref"
+
+
+@patch("invenio_pidstore.providers.crossref.logger")
+def test_crossref_error_delete(logger, app, db):
+    """Test reserve errors."""
+    with app.app_context():
+        api = MagicMock()
+        provider = CrossrefProvider.create("10.1234/a", client=api)
+
+        # DOIs in new state doesn't contact crossref
+        api.metadata_delete.side_effect = CrossrefError
+        assert provider.delete()
+
+        # Already registered DOIs do contact crossref to delete
+        provider = CrossrefProvider.create(
+            "10.1234/b", client=api, status=PIDStatus.REGISTERED
+        )
+
+        api.metadata_delete.side_effect = CrossrefError
+        pytest.raises(CrossrefError, provider.delete)
+        assert logger.exception.call_args[0][0] == "Failed to delete in Crossref"
+
+
+@patch("invenio_pidstore.providers.crossref.logger")
+def test_crossref_sync(logger, app, db):
+    """Test sync."""
+    with app.app_context():
+        api = MagicMock()
+
+        provider = CrossrefProvider.create("10.1234/a", client=api)
+        assert provider.pid.status == PIDStatus.NEW
+
+        # Status can be set from api.doi_get reply
+        assert provider.sync_status()
+        assert provider.pid.status == PIDStatus.REGISTERED
+        api.doi_get.assert_called_with(provider.pid.pid_value)
+
+        api.doi_get.side_effect = CrossrefGoneError
+        assert provider.sync_status()
+        assert provider.pid.status == PIDStatus.DELETED
+
+        api.doi_get.side_effect = CrossrefNoContentError
+        assert provider.sync_status()
+        assert provider.pid.status == PIDStatus.REGISTERED
+
+        # Status *cannot/ be set from api.doi_get reply
+        # Try with api.metadata_get
+        api.doi_get.side_effect = CrossrefNotFoundError
+        assert provider.sync_status()
+        assert provider.pid.status == PIDStatus.RESERVED
+        api.metadata_get.assert_called_with(provider.pid.pid_value)
+
+        api.doi_get.side_effect = CrossrefNotFoundError
+        api.metadata_get.side_effect = CrossrefGoneError
+        assert provider.sync_status()
+        assert provider.pid.status == PIDStatus.DELETED
+
+        api.doi_get.side_effect = CrossrefNotFoundError
+        api.metadata_get.side_effect = CrossrefNoContentError
+        assert provider.sync_status()
+        assert provider.pid.status == PIDStatus.REGISTERED
+
+        api.doi_get.side_effect = CrossrefNotFoundError
+        api.metadata_get.side_effect = CrossrefNotFoundError
+        assert provider.sync_status()
+        assert provider.pid.status == PIDStatus.NEW
+
+        api.doi_get.side_effect = HttpError
+        assert provider.pid.status == PIDStatus.NEW
+        pytest.raises(HttpError, provider.sync_status)
+        assert provider.pid.status == PIDStatus.NEW
+        assert logger.exception.call_args[0][0] == "Failed to sync status from Crossref"
 
 
 def test_datacite_create_get(app, db):
