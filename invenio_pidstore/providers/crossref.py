@@ -64,7 +64,7 @@ class CrossrefProvider(BaseProvider):
 
         * `PIDSTORE_CROSSREF_PASSWORD` as password.
 
-        * `PIDSTORE_CROSSREF_DOI_PREFIX` as DOI prefix.
+        * `PIDSTORE_CROSSREF_DOI_PREFIXES` as DOI prefixes.
 
         * `PIDSTORE_CROSSREF_TESTMODE` to `True` if it configured in test mode.
 
@@ -82,7 +82,7 @@ class CrossrefProvider(BaseProvider):
             self.api = CrossrefXMLClient(
                 username=current_app.config.get("PIDSTORE_CROSSREF_USERNAME"),
                 password=current_app.config.get("PIDSTORE_CROSSREF_PASSWORD"),
-                prefix=current_app.config.get("PIDSTORE_CROSSREF_DOI_PREFIX"),
+                prefixes=current_app.config.get("PIDSTORE_CROSSREF_DOI_PREFIXES"),
                 test_mode=current_app.config.get("PIDSTORE_CROSSREF_TESTMODE", False),
                 url=current_app.config.get("PIDSTORE_CROSSREF_URL"),
             )
@@ -100,7 +100,7 @@ class CrossrefProvider(BaseProvider):
         except (CrossrefError, HttpError):
             logger.exception("Failed to reserve in Crossref", extra=dict(pid=self.pid))
             raise
-        logger.info("Successfully reserved in Crossref", extra=dict(pid=self.pid))
+        logger.error("Successfully reserved in Crossref", extra=dict(pid=self.pid))
         return True
 
     def register(self, url, doc):
@@ -119,7 +119,7 @@ class CrossrefProvider(BaseProvider):
         except (CrossrefError, HttpError):
             logger.exception("Failed to register in Crossref", extra=dict(pid=self.pid))
             raise
-        logger.info("Successfully registered in Crossref", extra=dict(pid=self.pid))
+        logger.error("Successfully registered in Crossref", extra=dict(pid=self.pid))
         return True
 
     def update(self, url, doc):
@@ -131,7 +131,7 @@ class CrossrefProvider(BaseProvider):
         :returns: `True` if is updated successfully.
         """
         if self.pid.is_deleted():
-            logger.info("Reactivate in Crossref", extra=dict(pid=self.pid))
+            logger.error("Reactivate in Crossref", extra=dict(pid=self.pid))
 
         try:
             # Set metadata
@@ -143,7 +143,7 @@ class CrossrefProvider(BaseProvider):
 
         if self.pid.is_deleted():
             self.pid.sync_status(PIDStatus.REGISTERED)
-        logger.info("Successfully updated in Crossref", extra=dict(pid=self.pid))
+        logger.error("Successfully updated in Crossref", extra=dict(pid=self.pid))
         return True
 
     def delete(self):
@@ -163,7 +163,7 @@ class CrossrefProvider(BaseProvider):
         except (CrossrefError, HttpError):
             logger.exception("Failed to delete in Crossref", extra=dict(pid=self.pid))
             raise
-        logger.info("Successfully deleted in Crossref", extra=dict(pid=self.pid))
+        logger.error("Successfully deleted in Crossref", extra=dict(pid=self.pid))
         return True
 
     def sync_status(self):
@@ -205,7 +205,7 @@ class CrossrefProvider(BaseProvider):
 
         self.pid.sync_status(status)
 
-        logger.info(
+        logger.error(
             "Successfully synced status from Crossref", extra=dict(pid=self.pid)
         )
         return True
