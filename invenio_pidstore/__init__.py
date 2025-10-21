@@ -3,6 +3,7 @@
 # This file is part of Invenio.
 # Copyright (C) 2015-2018 CERN.
 # Copyright (C) 2024-2025 Graz University of Technology.
+# Copyright (C) 2025 KTH Royal Institute of Technology.
 #
 # Invenio is free software; you can redistribute it and/or modify it
 # under the terms of the MIT License; see LICENSE file for more details.
@@ -367,6 +368,6 @@ Above is equivalent to:
 from .ext import InvenioPIDStore
 from .proxies import current_pidstore
 
-__version__ = "2.2.1"
+__version__ = "2.2.2"
 
 __all__ = ("__version__", "InvenioPIDStore", "current_pidstore")
